@@ -14,7 +14,7 @@ def clean(text):
     return re.sub(r"\s+", " ", text).strip()
 
 def chunk(text):
-    return [text[i:i+400] for i in range(0, len(text), 400)]
+    return [p.strip() for p in text.split("\n") if len(p.strip()) > 20]
 
 def embed(texts):
     res = client.embeddings.create(
@@ -65,7 +65,12 @@ def run_pipeline(file_path, query):
     store.add(embeds, chunks)
 
     q_vec = embed([query])[0]
-    results = store.search(q_vec, TOP_K)
+    results = store.search(q_vec, TOP_K) 
+    print("Retrieved chunks:", results)  # 👈 STEP 1 (DEBUG)
+
+# fallback if empty or weak
+if not results or all(len(r.strip()) < 10 for r in results):
+    results = chunks[:TOP_K]   # send first chunks as fallback
 
     context = "\n\n".join(results)
 
