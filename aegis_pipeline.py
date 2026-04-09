@@ -67,6 +67,13 @@ def run_pipeline(file_path, query):
     q_vec = embed([query])[0]
     results = store.search(q_vec, TOP_K) 
     print("Retrieved chunks:", results)  # 👈 STEP 1 (DEBUG)
+    # 🔥 PRO UPGRADE (keyword-based boost)
+if "leave" in query.lower():
+    results = [c for c in chunks if "leave" in c.lower()]
+
+# fallback if still empty
+if not results:
+    results = chunks[:TOP_K]
 
 # fallback if empty or weak
 if not results or all(len(r.strip()) < 10 for r in results):
