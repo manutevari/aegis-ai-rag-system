@@ -1,28 +1,25 @@
-# ============================
-# AEGIS FINAL PIPELINE (WORKING)
-# ============================
-import pandas as pd
-import matplotlib.pyplot as plt
 import os
 import re
 import faiss
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 from openai import OpenAI
 
-# ---------- CONFIG ----------
+# CONFIG
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 TOP_K = 5
 
-# ---------- LOAD ----------
+# LOAD
 def load_txt(path):
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
-# ---------- CLEAN ----------
+# CLEAN
 def clean(text):
     return re.sub(r"\s+", " ", text).strip()
 
-# ---------- CHUNK (IMPROVED) ----------
+# PANDAS STRUCTURE-AWARE CHUNKING
 def chunk(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
@@ -51,20 +48,9 @@ def chunk(text):
     df = pd.DataFrame(data)
     df["chunk"] = df["section"] + "\n" + df["content"]
 
-    return df, df["chunk"].tolist()
-------------MATPLOLIB FUNCTION-----------
-def plot_chunk_lengths(chunks):
-    lengths = [len(c) for c in chunks]
+    return df["chunk"].tolist()
 
-    plt.figure()
-    plt.hist(lengths)
-    plt.title("Chunk Length Distribution")
-    plt.xlabel("Chunk Length")
-    plt.ylabel("Frequency")
-    plt.tight_layout()
-
-    return plt
-# ---------- EMBEDDING ----------
+# EMBEDDING
 def embed(texts):
     res = client.embeddings.create(
         model="text-embedding-3-small",
@@ -72,7 +58,7 @@ def embed(texts):
     )
     return [d.embedding for d in res.data]
 
-# ---------- VECTOR STORE ----------
+# VECTOR STORE
 class Store:
     def __init__(self, dim):
         self.index = faiss.IndexFlatL2(dim)
@@ -86,7 +72,7 @@ class Store:
         D, I = self.index.search(np.array([q]).astype("float32"), k)
         return [self.data[i] for i in I[0] if i < len(self.data)]
 
-# ---------- GENERATION ----------
+# GENERATE
 def generate(query, context):
     prompt = f"""
 Answer ONLY from context.
@@ -98,22 +84,32 @@ Context:
 Question:
 {query}
 """
-
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
-
     return res.choices[0].message.content
 
-# ---------- MAIN PIPELINE ----------
-    def run_pipeline(file_path, query):
+# MATPLOTLIB GRAPH
+def plot_chunk_lengths(chunks):
+    lengths = [len(c) for c in chunks]
+
+    plt.figure()
+    plt.hist(lengths)
+    plt.title("Chunk Length Distribution")
+    plt.xlabel("Chunk Length")
+    plt.ylabel("Frequency")
+    plt.tight_layout()
+
+    return plt
+
+# MAIN PIPELINE
+def run_pipeline(file_path, query):
     text = clean(load_txt(file_path))
+    chunks = chunk(text)
 
-    df, chunks = chunk(text)
-
-    # 👉 DEBUG PRINT
-    print(df.head())
+    if not chunks:
+        return "No readable content", None
 
     embeds = embed(chunks)
 
@@ -123,14 +119,18 @@ Question:
     q_vec = embed([query])[0]
     results = store.search(q_vec, TOP_K)
 
+    # Keyword boost
+    if "leave" in query.lower():
+        keyword_hits = [c for c in chunks if "leave" in c.lower()]
+        if keyword_hits:
+            results = keyword_hits[:TOP_K]
+
     if not results:
         results = chunks[:TOP_K]
 
     context = "\n\n".join(results)
 
     answer = generate(query, context)
-
-    # 👉 RETURN GRAPH ALSO
     fig = plot_chunk_lengths(chunks)
 
     return answer, fig
