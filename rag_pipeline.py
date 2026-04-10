@@ -176,6 +176,24 @@ def broad_retrieval(query):
 # STREAMLIT ADAPTER
 # -------------------------------
 def retrieve_candidates(query):
+    # -------------------------------
+# EVALUATION MODULE
+# -------------------------------
+def evaluate(test_cases):
+    correct = 0
+    total = len(test_cases)
+
+    for query, expected in test_cases:
+        results = retrieve_candidates(query)
+
+        if any(expected.lower() in r.lower() for r in results):
+            correct += 1
+
+    accuracy = correct / total if total > 0 else 0
+
+    print(f"Total: {total}")
+    print(f"Correct: {correct}")
+    print(f"Accuracy: {accuracy:.2f}")
     results = broad_retrieval(query)
 
     return [
