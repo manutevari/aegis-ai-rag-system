@@ -1,45 +1,41 @@
 import streamlit as st
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
 import os
 import time
 from openai import OpenAI
+from sentence_transformers import CrossEncoder
 
-# SAFE IMPORT (won’t crash if pipeline fails)
+# SAFE IMPORT
 try:
     from rag_pipeline import retrieve_candidates
 except Exception as e:
     def retrieve_candidates(q):
-        return [f"Pipeline not loaded: {e}"]
+        return [f"Pipeline error: {e}"]
 
 st.set_page_config(page_title="AEGIS RAG", layout="wide")
-
 st.title("🚀 AEGIS Enterprise RAG System")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# LOAD LIGHTWEIGHT CROSS-ENCODER
 @st.cache_resource
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
-    model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
-    return tokenizer, model
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
-tokenizer, model = load_model()
+model = load_model()
 
+# RERANK
 def rerank(query, candidates):
-    results = []
-    for text in candidates[:25]:
-        inputs = tokenizer(query, text, return_tensors="pt", truncation=True)
-        with torch.no_grad():
-            score = model(**inputs).logits.squeeze().item()
-        results.append((text, score))
+    pairs = [[query, c] for c in candidates[:25]]
+    scores = model.predict(pairs)
+
+    results = list(zip(candidates[:25], scores))
     return sorted(results, key=lambda x: x[1], reverse=True)
 
+# GENERATE ANSWER
 def generate_answer(query, context):
     prompt = f"""
-You are an enterprise policy assistant.
-Answer ONLY using the provided context.
-Cite sources like [Source 1].
+Answer ONLY from context.
+Give clear, factual answer.
 
 Context:
 {context}
@@ -47,12 +43,13 @@ Context:
 Question:
 {query}
 """
-    response = client.chat.completions.create(
+    res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content
+    return res.choices[0].message.content
 
+# SESSION
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -69,7 +66,9 @@ if query:
 
     with st.chat_message("assistant"):
         with st.spinner("Processing..."):
+
             candidates = retrieve_candidates(query)
+
             reranked = rerank(query, candidates)
 
             top_chunks = reranked[:5]
@@ -81,15 +80,12 @@ if query:
 
             with st.expander("📌 Sources"):
                 for i, (text, score) in enumerate(top_chunks):
-                    st.write(f"Source {i+1} | Score: {score:.3f}")
+                    st.write(f"{i+1}. Score: {score:.3f}")
                     st.write(text)
                     st.divider()
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
 
-    latency = round(time.time() - start, 2)
-
-    st.sidebar.header("📊 Metrics")
-    st.sidebar.metric("Latency", latency)
+    st.sidebar.metric("Latency", round(time.time() - start, 2))
     st.sidebar.metric("Candidates", len(candidates))
-    st.sidebar.metric("Used Chunks", len(top_chunks))
+    st.sidebar.metric("Chunks Used", len(top_chunks))
