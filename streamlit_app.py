@@ -2,7 +2,7 @@ import streamlit as st
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 
-from rag_pipeline import retrieve_candidates  # backend
+from rag_pipeline import retrieve_candidates
 
 st.set_page_config(page_title="Aegis RAG", layout="wide")
 
