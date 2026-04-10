@@ -1,8 +1,7 @@
+torch --index-url https://download.pytorch.org/whl/cpu
+transformers
 streamlit
 openai
-pinecone
+pinecone-client
 pydantic
 matplotlib
-transformers
-transformers==4.41.2
-torch==2.2.2
