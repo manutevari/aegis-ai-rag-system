@@ -1,12 +1,20 @@
 import streamlit as st
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
-from rag_pipeline import retrieve_candidates
-from openai import OpenAI
 import os
 import time
+from openai import OpenAI
 
-st.set_page_config(page_title="Aegis RAG Chat", layout="wide")
+# SAFE IMPORT (won’t crash if pipeline fails)
+try:
+    from rag_pipeline import retrieve_candidates
+except Exception as e:
+    def retrieve_candidates(q):
+        return [f"Pipeline not loaded: {e}"]
+
+st.set_page_config(page_title="AEGIS RAG", layout="wide")
+
+st.title("🚀 AEGIS Enterprise RAG System")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -19,48 +27,69 @@ def load_model():
 tokenizer, model = load_model()
 
 def rerank(query, candidates):
-    scores = []
-    for passage in candidates[:25]:
-        inputs = tokenizer(query, passage, return_tensors="pt", truncation=True)
+    results = []
+    for text in candidates[:25]:
+        inputs = tokenizer(query, text, return_tensors="pt", truncation=True)
         with torch.no_grad():
             score = model(**inputs).logits.squeeze().item()
-        scores.append((passage, score))
-    return sorted(scores, key=lambda x: x[1], reverse=True)
+        results.append((text, score))
+    return sorted(results, key=lambda x: x[1], reverse=True)
 
-def generate(query, context):
-    res = client.chat.completions.create(
+def generate_answer(query, context):
+    prompt = f"""
+You are an enterprise policy assistant.
+Answer ONLY using the provided context.
+Cite sources like [Source 1].
+
+Context:
+{context}
+
+Question:
+{query}
+"""
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role":"user","content":f"Context:\n{context}\nQ:{query}"}]
+        messages=[{"role": "user", "content": prompt}]
     )
-    return res.choices[0].message.content
+    return response.choices[0].message.content
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-st.title("🚀 AEGIS FINAL RAG SYSTEM")
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
-query = st.chat_input("Ask...")
+query = st.chat_input("Ask your question...")
 
 if query:
     start = time.time()
 
-    st.session_state.messages.append({"role":"user","content":query})
+    st.session_state.messages.append({"role": "user", "content": query})
 
     with st.chat_message("assistant"):
-        candidates = retrieve_candidates(query)
-        reranked = rerank(query, candidates)
+        with st.spinner("Processing..."):
+            candidates = retrieve_candidates(query)
+            reranked = rerank(query, candidates)
 
-        top = reranked[:5]
-        context = "\n\n".join([t for t,_ in top])
+            top_chunks = reranked[:5]
+            context = "\n\n".join([c for c, _ in top_chunks])
 
-        answer = generate(query, context)
-        st.write(answer)
+            answer = generate_answer(query, context)
 
-        with st.expander("Sources"):
-            for i,(t,s) in enumerate(top):
-                st.write(f"{i+1}. Score {s:.3f}")
-                st.write(t)
+            st.write(answer)
 
-    st.session_state.messages.append({"role":"assistant","content":answer})
+            with st.expander("📌 Sources"):
+                for i, (text, score) in enumerate(top_chunks):
+                    st.write(f"Source {i+1} | Score: {score:.3f}")
+                    st.write(text)
+                    st.divider()
 
-    st.sidebar.metric("Latency", round(time.time()-start,2))
+    st.session_state.messages.append({"role": "assistant", "content": answer})
+
+    latency = round(time.time() - start, 2)
+
+    st.sidebar.header("📊 Metrics")
+    st.sidebar.metric("Latency", latency)
+    st.sidebar.metric("Candidates", len(candidates))
+    st.sidebar.metric("Used Chunks", len(top_chunks))
