@@ -1,7 +1,7 @@
-torch --index-url https://download.pytorch.org/whl/cpu
-transformers
 streamlit
 openai
 pinecone-client
 pydantic
 matplotlib
+transformers
+torch --index-url https://download.pytorch.org/whl/cpu
