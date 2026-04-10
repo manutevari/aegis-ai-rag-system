@@ -1,3 +1,7 @@
+# ============================
+# AEGIS FINAL PIPELINE (UPGRADED FAISS)
+# ============================
+
 import os
 import re
 import faiss
@@ -8,7 +12,9 @@ from openai import OpenAI
 
 # CONFIG
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 TOP_K = 5
+CANDIDATES = 20
 
 # LOAD
 def load_txt(path):
@@ -19,7 +25,7 @@ def load_txt(path):
 def clean(text):
     return re.sub(r"\s+", " ", text).strip()
 
-# PANDAS STRUCTURE-AWARE CHUNKING
+# STRUCTURE-AWARE CHUNKING (PANDAS)
 def chunk(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
@@ -58,21 +64,54 @@ def embed(texts):
     )
     return [d.embedding for d in res.data]
 
-# VECTOR STORE
+# FAISS STORE (COSINE SIMILARITY)
 class Store:
     def __init__(self, dim):
-        self.index = faiss.IndexFlatL2(dim)
+        self.index = faiss.IndexFlatIP(dim)
         self.data = []
 
     def add(self, embeds, chunks):
-        self.index.add(np.array(embeds).astype("float32"))
-        self.data.extend(chunks)
+        arr = np.array(embeds).astype("float32")
 
-    def search(self, q, k):
-        D, I = self.index.search(np.array([q]).astype("float32"), k)
-        return [self.data[i] for i in I[0] if i < len(self.data)]
+        # Normalize for cosine similarity
+        faiss.normalize_L2(arr)
 
-# GENERATE
+        self.index.add(arr)
+
+        for c in chunks:
+            self.data.append({
+                "text": c,
+                "length": len(c)
+            })
+
+    def search(self, q_vec, k=CANDIDATES):
+        q = np.array([q_vec]).astype("float32")
+
+        faiss.normalize_L2(q)
+
+        D, I = self.index.search(q, k)
+
+        results = []
+        for idx in I[0]:
+            if idx < len(self.data):
+                results.append(self.data[idx])
+
+        return results
+
+# RE-RANKING
+def rerank(query, results, top_k=TOP_K):
+    scored = []
+
+    for r in results:
+        text = r["text"]
+        score = sum(word in text.lower() for word in query.lower().split())
+        scored.append((score, text))
+
+    scored.sort(reverse=True)
+
+    return [text for _, text in scored[:top_k]]
+
+# GENERATION
 def generate(query, context):
     prompt = f"""
 Answer ONLY from context.
@@ -109,28 +148,35 @@ def run_pipeline(file_path, query):
     chunks = chunk(text)
 
     if not chunks:
-        return "No readable content", None
+        return "No readable content found", None
 
     embeds = embed(chunks)
 
     store = Store(len(embeds[0]))
     store.add(embeds, chunks)
 
+    # QUERY
     q_vec = embed([query])[0]
-    results = store.search(q_vec, TOP_K)
 
-    # Keyword boost
+    # STEP 1: Retrieve candidates
+    candidates = store.search(q_vec, k=CANDIDATES)
+
+    # STEP 2: Keyword filter (boost)
     if "leave" in query.lower():
-        keyword_hits = [c for c in chunks if "leave" in c.lower()]
-        if keyword_hits:
-            results = keyword_hits[:TOP_K]
+        candidates = [c for c in candidates if "leave" in c["text"].lower()]
 
+    # STEP 3: Re-rank
+    results = rerank(query, candidates, top_k=TOP_K)
+
+    # Fallback
     if not results:
         results = chunks[:TOP_K]
 
     context = "\n\n".join(results)
 
     answer = generate(query, context)
+
+    # Graph
     fig = plot_chunk_lengths(chunks)
 
     return answer, fig
