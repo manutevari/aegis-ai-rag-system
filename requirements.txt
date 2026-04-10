@@ -3,3 +3,5 @@ openai
 pinecone
 pydantic
 matplotlib
+transformers
+torch
