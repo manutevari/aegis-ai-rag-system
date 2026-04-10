@@ -18,9 +18,9 @@ if st.button("Run"):
         st.markdown("### 📌 Answer")
         st.write(result)
 
-        st.markdown("### 📊 Chunk Analysis")
-        st.pyplot(fig)
+        if fig:
+            st.markdown("### 📊 Chunk Analysis")
+            st.pyplot(fig)
 
     else:
         st.warning("Upload file and enter query")
-
