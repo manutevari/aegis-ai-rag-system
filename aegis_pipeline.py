@@ -249,4 +249,5 @@ def run_pipeline(file_path, query):
 
     context = "\n\n".join(texts)
 
+    # ✅ IMPORTANT: return INSIDE function
     return generate(query, context)
