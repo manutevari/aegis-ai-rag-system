@@ -107,43 +107,30 @@ Question:
     return res.choices[0].message.content
 
 # ---------- MAIN PIPELINE ----------
-def run_pipeline(file_path, query):
-    # Load + clean
+    def run_pipeline(file_path, query):
     text = clean(load_txt(file_path))
 
-    # Chunk
-    chunks = chunk(text)
+    df, chunks = chunk(text)
 
-    if not chunks:
-        return "No readable content found in file."
+    # 👉 DEBUG PRINT
+    print(df.head())
 
-    # Embed
     embeds = embed(chunks)
 
-    # Store
     store = Store(len(embeds[0]))
     store.add(embeds, chunks)
 
-    # Query embedding
     q_vec = embed([query])[0]
-
-    # Search
     results = store.search(q_vec, TOP_K)
 
-    print("Retrieved:", results)  # Debug
-
-    # 🔥 Keyword boost (important)
-    if "leave" in query.lower():
-        keyword_hits = [c for c in chunks if "leave" in c.lower()]
-        if keyword_hits:
-            results = keyword_hits[:TOP_K]
-
-    # Fallback
     if not results:
         results = chunks[:TOP_K]
 
-    # Context
     context = "\n\n".join(results)
 
-    # Generate answer
-    return generate(query, context)
+    answer = generate(query, context)
+
+    # 👉 RETURN GRAPH ALSO
+    fig = plot_chunk_lengths(chunks)
+
+    return answer, fig
