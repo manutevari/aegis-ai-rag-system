@@ -1,10 +1,16 @@
-import re
 import os
-from datetime import datetime
+import re
 from openai import OpenAI
 from pydantic import BaseModel
+from pinecone import Pinecone
+from datetime import datetime
 
+# -------------------------------
+# INIT
+# -------------------------------
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index("aegis-index")
 
 # -------------------------------
 # METADATA SCHEMA
@@ -24,69 +30,55 @@ def clean(text):
     return re.sub(r"\s+", " ", text).strip()
 
 # -------------------------------
-# TABLE HANDLING (FIXED ✅)
+# TABLE HANDLING (FULL)
 # -------------------------------
 def process_table(table_lines):
     headers = table_lines[0]
     rows = table_lines[2:]
-
-    chunks = []
-    for row in rows:
-        chunks.append(headers + "\n" + row)
-    return chunks
+    return [headers + "\n" + r for r in rows]
 
 # -------------------------------
-# SEMANTIC CHUNKING (FULL AEGIS)
+# SEMANTIC CHUNKING
 # -------------------------------
-def chunk(text, overlap=80):
+def chunk(text):
     sections = re.split(r"(#{1,3} .+)", text)
 
     chunks = []
-    current_h1 = ""
-    current_h2 = ""
+    h1, h2 = "", ""
 
     for i in range(1, len(sections), 2):
         header = sections[i]
         body = sections[i+1]
 
         if header.startswith("# "):
-            current_h1 = header
+            h1 = header
         elif header.startswith("## "):
-            current_h2 = header
+            h2 = header
 
-        # table detection
         lines = body.split("\n")
-        table_buffer = []
+        table_buf = []
 
         for line in lines:
             if "|" in line:
-                table_buffer.append(line)
+                table_buf.append(line)
             else:
-                if table_buffer:
-                    chunks.extend(process_table(table_buffer))
-                    table_buffer = []
+                if table_buf:
+                    chunks.extend(process_table(table_buf))
+                    table_buf = []
+                chunks.append(f"{h1}\n{h2}\n{line}")
 
-                chunks.append(f"{current_h1}\n{current_h2}\n{line}")
-
-    # overlap
-    final_chunks = []
-    for i in range(len(chunks)):
-        start = max(0, i-1)
-        combined = " ".join(chunks[start:i+1])
-        final_chunks.append(combined[-500:])
-
-    return final_chunks
+    return chunks
 
 # -------------------------------
-# METADATA EXTRACTION (FULL)
+# METADATA EXTRACTION
 # -------------------------------
 def extract_metadata(text):
     return {
-        "document_id": "DOC-001",
+        "document_id": "TRV-POL-2005-V3",
         "policy_category": "Travel" if "travel" in text.lower() else "HR",
         "policy_owner": "GCT-RM",
         "effective_date": "2026-02-01",
-        "h1_header": text.split("\n")[0] if "\n" in text else "",
+        "h1_header": text.split("\n")[0],
         "h2_header": text.split("\n")[1] if "\n" in text else ""
     }
 
@@ -101,9 +93,34 @@ def embed(texts):
     return [d.embedding for d in res.data]
 
 # -------------------------------
-# MULTI QUERY
+# UPSERT TO PINECONE
 # -------------------------------
-def expand_query(query):
+def upsert(chunks):
+    vectors = []
+    for i, c in enumerate(chunks):
+        meta = extract_metadata(c)
+        vec = embed([c])[0]
+        vectors.append((str(i), vec, {"text": c, **meta}))
+
+    index.upsert(vectors)
+
+# -------------------------------
+# LLM ROUTER (PRE-FILTER)
+# -------------------------------
+def classify_intent(query):
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{
+            "role": "user",
+            "content": f"Classify into HR or Travel:\n{query}"
+        }]
+    )
+    return res.choices[0].message.content.strip()
+
+# -------------------------------
+# MULTI-QUERY
+# -------------------------------
+def expand(query):
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role":"user","content":f"Generate 3 variations:\n{query}"}]
@@ -121,44 +138,37 @@ def hyde(query):
     return res.choices[0].message.content
 
 # -------------------------------
-# PRE-FILTER
+# VECTOR SEARCH WITH FILTER
 # -------------------------------
-def pre_filter(query):
-    if "leave" in query.lower():
-        return "HR"
-    return "Travel"
+def search(query, category):
+    q_vec = embed([query])[0]
+
+    return index.query(
+        vector=q_vec,
+        top_k=25,
+        include_metadata=True,
+        filter={"policy_category": category}
+    )["matches"]
 
 # -------------------------------
-# POST FILTER (GLOBAL FIX ✅)
+# POST FILTER (LATEST)
 # -------------------------------
 def post_filter(results):
-    if not results:
-        return results
-
-    latest_date = max(r["metadata"]["effective_date"] for r in results)
-
-    return [
-        r for r in results
-        if r["metadata"]["effective_date"] == latest_date
-    ]
-
-# -------------------------------
-# MOCK VECTOR SEARCH (Replace with Pinecone)
-# -------------------------------
-def vector_search(query):
-    # replace with Pinecone
-    return []
+    latest = max(r["metadata"]["effective_date"] for r in results)
+    return [r for r in results if r["metadata"]["effective_date"] == latest]
 
 # -------------------------------
 # BROAD RETRIEVAL
 # -------------------------------
 def broad_retrieval(query):
-    queries = expand_query(query)
+    category = classify_intent(query)
+
+    queries = expand(query)
     queries.append(hyde(query))
 
     results = []
     for q in queries:
-        results.extend(vector_search(q))
+        results.extend(search(q, category))
 
     return post_filter(results)
 
