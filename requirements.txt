@@ -3,3 +3,5 @@ openai
 faiss-cpu
 numpy
 scikit-learn
+pandas
+matplotlib
