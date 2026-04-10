@@ -1,7 +1,8 @@
 # ============================
 # AEGIS FINAL PIPELINE (WORKING)
 # ============================
-
+import pandas as pd
+import matplotlib.pyplot as plt
 import os
 import re
 import faiss
@@ -23,8 +24,46 @@ def clean(text):
 
 # ---------- CHUNK (IMPROVED) ----------
 def chunk(text):
-    return [p.strip() for p in text.split("\n") if len(p.strip()) > 20]
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
 
+    data = []
+    current_section = "General"
+    buffer = []
+
+    for line in lines:
+        if line.isupper() or (len(line.split()) < 6 and line.istitle()):
+            if buffer:
+                data.append({
+                    "section": current_section,
+                    "content": " ".join(buffer)
+                })
+                buffer = []
+            current_section = line
+        else:
+            buffer.append(line)
+
+    if buffer:
+        data.append({
+            "section": current_section,
+            "content": " ".join(buffer)
+        })
+
+    df = pd.DataFrame(data)
+    df["chunk"] = df["section"] + "\n" + df["content"]
+
+    return df, df["chunk"].tolist()
+------------MATPLOLIB FUNCTION-----------
+def plot_chunk_lengths(chunks):
+    lengths = [len(c) for c in chunks]
+
+    plt.figure()
+    plt.hist(lengths)
+    plt.title("Chunk Length Distribution")
+    plt.xlabel("Chunk Length")
+    plt.ylabel("Frequency")
+    plt.tight_layout()
+
+    return plt
 # ---------- EMBEDDING ----------
 def embed(texts):
     res = client.embeddings.create(
