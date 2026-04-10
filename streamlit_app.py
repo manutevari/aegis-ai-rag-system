@@ -13,14 +13,10 @@ if st.button("Run"):
             tmp.write(uploaded_file.getvalue())
             file_path = tmp.name
 
-        result, fig = run_pipeline(file_path, query)
+        result = run_pipeline(file_path, query)
 
         st.markdown("### 📌 Answer")
         st.write(result)
-
-        if fig:
-            st.markdown("### 📊 Chunk Analysis")
-            st.pyplot(fig)
 
     else:
         st.warning("Upload file and enter query")
