@@ -1,19 +1,33 @@
 import streamlit as st
-import tempfile
-from aegis_pipeline import run_pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
 
-st.title("Aegis AI Assistant")
+from rag_pipeline import retrieve_candidates  # 👈 connect backend
 
-file = st.file_uploader("Upload file", type=["txt"])
-query = st.text_input("Ask something")
+# Load model once
+tokenizer = AutoTokenizer.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
+model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
-if st.button("Run"):
-    if file and query:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file.getvalue())
-            path = tmp.name
+def rerank(query, candidates):
+    scores = []
+    for passage in candidates:
+        inputs = tokenizer(query, passage, return_tensors="pt", truncation=True)
+        with torch.no_grad():
+            score = model(**inputs).logits.squeeze().item()
+        scores.append((passage, score))
+    return sorted(scores, key=lambda x: x[1], reverse=True)
 
-        result = run_pipeline(path, query)
-        st.write(result)
-    else:
-        st.warning("Upload file and enter query")
+# UI
+st.title("🚀 Aegis RAG System with Reranking")
+
+query = st.text_input("Enter your query:")
+
+if query:
+    candidates = retrieve_candidates(query)  # ✅ real data
+    reranked = rerank(query, candidates)
+
+    st.write("### Top Results")
+    for text, score in reranked[:3]:
+        st.write(f"Score: {score:.4f}")
+        st.write(text)
+        st.write("---")
