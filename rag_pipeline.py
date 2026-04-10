@@ -286,3 +286,11 @@ def run_pipeline(file_path, query):
     context = "\n\n".join(texts)
 
     return generate(query, context)
+    def retrieve_candidates(query):
+    matches = broad_retrieval(query)
+
+    return [
+        m["metadata"]["text"]
+        for m in matches
+        if m.get("metadata") and m["metadata"].get("text")
+    ]
