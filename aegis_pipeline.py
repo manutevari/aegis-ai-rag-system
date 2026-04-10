@@ -1,17 +1,18 @@
 # ============================
-# AEGIS FINAL SAFE SYSTEM
+# AEGIS FINAL COMPLETE SYSTEM (WITH PYDANTIC + MATPLOTLIB)
 # ============================
 
 import os
 import re
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
+from pydantic import BaseModel
+import matplotlib.pyplot as plt
 
 # ----------------------------
 # CONFIG
 # ----------------------------
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 INDEX_NAME = "aegis-index"
@@ -38,17 +39,26 @@ def clean(text):
     return re.sub(r"\s+", " ", text).strip()
 
 # ----------------------------
-# METADATA
+# PYDANTIC MODEL
+# ----------------------------
+class DocumentMetadata(BaseModel):
+    document_id: str
+    category: str
+    effective_date: str
+
+# ----------------------------
+# METADATA EXTRACTION
 # ----------------------------
 def extract_metadata(text):
-    return {
+    data = {
         "document_id": "DOC-001",
         "category": "Travel" if "travel" in text.lower() else "General",
         "effective_date": "2026-02-01"
     }
+    return DocumentMetadata(**data).dict()
 
 # ----------------------------
-# CHUNKING (SAFE)
+# CHUNKING
 # ----------------------------
 def chunk(text, max_size=400, overlap=60):
     chunks = []
@@ -77,14 +87,34 @@ def chunk(text, max_size=400, overlap=60):
     if buffer.strip():
         chunks.append({"text": f"{current_header}\n{buffer}", "section": current_header})
 
-    # 🔥 FALLBACK
     if not chunks:
         chunks = [{"text": text[:500], "section": "fallback"}]
 
     return chunks
 
 # ----------------------------
-# EMBEDDING (SAFE)
+# MATPLOTLIB ANALYSIS
+# ----------------------------
+def plot_chunk_lengths(chunks):
+    try:
+        lengths = [len(c["text"]) for c in chunks if c["text"]]
+
+        if not lengths:
+            return
+
+        plt.figure()
+        plt.hist(lengths)
+        plt.title("Chunk Length Distribution")
+        plt.xlabel("Length")
+        plt.ylabel("Frequency")
+
+        plt.savefig("chunk_plot.png")
+        plt.close()
+    except:
+        pass
+
+# ----------------------------
+# EMBEDDING
 # ----------------------------
 def embed(texts):
     if not texts:
@@ -102,9 +132,11 @@ def embed(texts):
 class PineconeStore:
     def upsert(self, embeds, chunks, metadata):
         vectors = []
+
         for i, (emb, c) in enumerate(zip(embeds, chunks)):
             if not emb:
                 continue
+
             vectors.append({
                 "id": f"{metadata['document_id']}_{i}",
                 "values": emb,
@@ -138,8 +170,7 @@ def expand_query(query):
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": f"Generate 3 variations:\n{query}"}]
     )
-    variations = res.choices[0].message.content.split("\n")
-    return [query] + [v.strip() for v in variations if v.strip()]
+    return [query] + [v.strip() for v in res.choices[0].message.content.split("\n") if v.strip()]
 
 # ----------------------------
 # HYDE
@@ -161,19 +192,25 @@ def broad_retrieval(query):
     results = []
 
     for q in queries:
-        q_vec = embed([q])[0]
+        emb = embed([q])
+        if not emb:
+            continue
+        q_vec = emb[0]
+
         res = index.query(vector=q_vec, top_k=25, include_metadata=True, filter=filters)
         results.extend(res["matches"])
 
     # HYDE
-    h_vec = embed([hyde(query)])[0]
-    res = index.query(vector=h_vec, top_k=25, include_metadata=True, filter=filters)
-    results.extend(res["matches"])
+    h_emb = embed([hyde(query)])
+    if h_emb:
+        h_vec = h_emb[0]
+        res = index.query(vector=h_vec, top_k=25, include_metadata=True, filter=filters)
+        results.extend(res["matches"])
 
     return results
 
 # ----------------------------
-# CROSS-ENCODER SCORING
+# CROSS ENCODER SCORING
 # ----------------------------
 def score(query, text):
     res = client.chat.completions.create(
@@ -221,15 +258,15 @@ def generate(query, context):
 def run_pipeline(file_path, query):
 
     text = clean(load_txt(file_path))
-
     if not text:
         return "Empty file."
 
     metadata = extract_metadata(text)
     chunks = chunk(text)
 
-    texts = [c["text"] for c in chunks if c["text"].strip()]
+    plot_chunk_lengths(chunks)
 
+    texts = [c["text"] for c in chunks if c["text"].strip()]
     if not texts:
         return "No usable content."
 
@@ -243,11 +280,9 @@ def run_pipeline(file_path, query):
     final = post_filter(reranked)
 
     texts = [r["metadata"]["text"] for r in final if r["metadata"]["text"].strip()]
-
     if not texts:
         return "No relevant content found."
 
     context = "\n\n".join(texts)
 
-    # ✅ IMPORTANT: return INSIDE function
     return generate(query, context)
