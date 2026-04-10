@@ -16,6 +16,9 @@ if st.button("Run"):
         result, fig = run_pipeline(file_path, query)
 
 st.markdown("### 📌 Answer")
+result, fig = run_pipeline(file_path, query)
+
+st.markdown("### 📌 Answer")
 st.write(result)
 
 st.markdown("### 📊 Chunk Analysis")
