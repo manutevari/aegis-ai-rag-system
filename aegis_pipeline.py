@@ -1,5 +1,5 @@
 # ============================
-# AEGIS FINAL COMPLETE SYSTEM
+# AEGIS FINAL SAFE SYSTEM
 # ============================
 
 import os
@@ -33,6 +33,8 @@ def load_txt(path):
     return open(path, "r", encoding="utf-8").read()
 
 def clean(text):
+    if not text:
+        return ""
     return re.sub(r"\s+", " ", text).strip()
 
 # ----------------------------
@@ -42,16 +44,14 @@ def extract_metadata(text):
     return {
         "document_id": "DOC-001",
         "category": "Travel" if "travel" in text.lower() else "General",
-        "owner": "GCT-RM",
         "effective_date": "2026-02-01"
     }
 
 # ----------------------------
-# CHUNKING
+# CHUNKING (SAFE)
 # ----------------------------
 def chunk(text, max_size=400, overlap=60):
     chunks = []
-    text = text.replace("\r", "")
     sections = re.split(r"(#{1,3} .+)", text)
 
     current_header = "General"
@@ -77,12 +77,19 @@ def chunk(text, max_size=400, overlap=60):
     if buffer.strip():
         chunks.append({"text": f"{current_header}\n{buffer}", "section": current_header})
 
+    # 🔥 FALLBACK
+    if not chunks:
+        chunks = [{"text": text[:500], "section": "fallback"}]
+
     return chunks
 
 # ----------------------------
-# EMBEDDING
+# EMBEDDING (SAFE)
 # ----------------------------
 def embed(texts):
+    if not texts:
+        return []
+
     res = client.embeddings.create(
         model="text-embedding-3-large",
         input=texts
@@ -90,12 +97,14 @@ def embed(texts):
     return [d.embedding for d in res.data]
 
 # ----------------------------
-# PINECONE STORE
+# STORE
 # ----------------------------
 class PineconeStore:
     def upsert(self, embeds, chunks, metadata):
         vectors = []
         for i, (emb, c) in enumerate(zip(embeds, chunks)):
+            if not emb:
+                continue
             vectors.append({
                 "id": f"{metadata['document_id']}_{i}",
                 "values": emb,
@@ -106,7 +115,9 @@ class PineconeStore:
                     "effective_date": metadata["effective_date"]
                 }
             })
-        index.upsert(vectors=vectors)
+
+        if vectors:
+            index.upsert(vectors=vectors)
 
 # ----------------------------
 # PRE-FILTER
@@ -127,7 +138,8 @@ def expand_query(query):
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": f"Generate 3 variations:\n{query}"}]
     )
-    return [query] + res.choices[0].message.content.split("\n")
+    variations = res.choices[0].message.content.split("\n")
+    return [query] + [v.strip() for v in variations if v.strip()]
 
 # ----------------------------
 # HYDE
@@ -145,6 +157,7 @@ def hyde(query):
 def broad_retrieval(query):
     filters = metadata_filter(query)
     queries = expand_query(query)
+
     results = []
 
     for q in queries:
@@ -160,7 +173,7 @@ def broad_retrieval(query):
     return results
 
 # ----------------------------
-# CROSS ENCODER (SHIFT)
+# CROSS-ENCODER SCORING
 # ----------------------------
 def score(query, text):
     res = client.chat.completions.create(
@@ -168,16 +181,16 @@ def score(query, text):
         messages=[{"role": "user", "content": f"Score 0-1:\n{query}\n{text}"}]
     )
     try:
-        return float(res.choices[0].message.content)
+        return float(res.choices[0].message.content.strip())
     except:
         return 0.0
 
 # ----------------------------
-# RERANK + PRUNE
+# RERANK
 # ----------------------------
 def rerank(query, matches):
     scored = [(score(query, m["metadata"]["text"]), m) for m in matches]
-    scored.sort(reverse=True)
+    scored.sort(key=lambda x: x[0], reverse=True)
     return [m for _, m in scored[:5]]
 
 # ----------------------------
@@ -209,10 +222,18 @@ def run_pipeline(file_path, query):
 
     text = clean(load_txt(file_path))
 
+    if not text:
+        return "Empty file."
+
     metadata = extract_metadata(text)
     chunks = chunk(text)
 
-    embeds = embed([c["text"] for c in chunks])
+    texts = [c["text"] for c in chunks if c["text"].strip()]
+
+    if not texts:
+        return "No usable content."
+
+    embeds = embed(texts)
 
     store = PineconeStore()
     store.upsert(embeds, chunks, metadata)
@@ -221,6 +242,11 @@ def run_pipeline(file_path, query):
     reranked = rerank(query, matches)
     final = post_filter(reranked)
 
-    context = "\n\n".join([r["metadata"]["text"] for r in final])
+    texts = [r["metadata"]["text"] for r in final if r["metadata"]["text"].strip()]
+
+    if not texts:
+        return "No relevant content found."
+
+    context = "\n\n".join(texts)
 
     return generate(query, context)
